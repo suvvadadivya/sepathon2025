@@ -1,146 +1,41 @@
-import pygame
-import random
-import io
-import sys
+import { BrowserRouter as Router, Route, Routes } from "react-router-dom";
+import { useEffect, useState } from "react";
+import Navbar from "./components/Navbar";
+import Home from "./pages/Home";
+import Login from "./pages/Login";
+import Signup from "./pages/Signup";
+import Profile from "./pages/Profile";
+import Leaderboard from "./pages/Leaderboard";
+import { ThemeProvider } from "./context/ThemeContext";
+import "./styles/global.css";
+import axios from "axios";
 
-# Game settings
-WIDTH, HEIGHT = 800, 600
-FPS = 60
-WHITE = (255, 255, 255)
-GREEN = (34, 139, 34)
-PLAYER_COLOR = (0, 0, 255)
-INPUT_BOX_COLOR = (50, 50, 50)
+export default function App() {
+  const [serverStatus, setServerStatus] = useState(null);
 
-# Initialize Pygame
-pygame.init()
-screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("CodeQuest: The Algorithmic Odyssey")
-clock = pygame.time.Clock()
+  useEffect(() => {
+    axios.get("http://localhost:8000/health")
+      .then(response => {
+        console.log("Server Status:", response.data);
+        setServerStatus(response.data);
+      })
+      .catch(error => {
+        console.error("Error connecting to backend:", error);
+      });
+  }, []);
 
-# Player class (Aria the Seeker)
-class Player:
-    def _init_(self):
-        self.x = WIDTH // 2
-        self.y = HEIGHT // 2
-        self.width = 50
-        self.height = 50
-        self.vel = 5
-        self.health = 100
-
-    def move(self, action):
-        if action == "UP":
-            self.y -= self.vel
-        elif action == "DOWN":
-            self.y += self.vel
-        elif action == "LEFT":
-            self.x -= self.vel
-        elif action == "RIGHT":
-            self.x += self.vel
-
-    def draw(self, screen):
-        pygame.draw.rect(screen, PLAYER_COLOR, (self.x, self.y, self.width, self.height))
-
-# Text input class for user code entry
-class InputBox:
-    def _init_(self, x, y, w, h, prompt):
-        self.rect = pygame.Rect(x, y, w, h)
-        self.color = INPUT_BOX_COLOR
-        self.text = ''
-        self.active = False
-        self.prompt = prompt
-
-    def handle_event(self, event):
-        if event.type == pygame.MOUSEBUTTONDOWN:
-            if self.rect.collidepoint(event.pos):
-                self.active = True
-            else:
-                self.active = False
-        if event.type == pygame.KEYDOWN:
-            if self.active:
-                if event.key == pygame.K_BACKSPACE:
-                    self.text = self.text[:-1]
-                else:
-                    self.text += event.unicode
-
-    def draw(self, screen):
-        pygame.draw.rect(screen, self.color, self.rect, 2)
-        font = pygame.font.Font(None, 32)
-        text_surface = font.render(self.text, True, WHITE)
-        screen.blit(text_surface, (self.rect.x + 5, self.rect.y + 5))
-
-        # Display prompt
-        prompt_surface = font.render(self.prompt, True, WHITE)
-        screen.blit(prompt_surface, (self.rect.x + 5, self.rect.y - 30))
-
-# Execute the user's code and get the result
-def execute_user_code(code):
-    try:
-        # Redirect stdout to capture print statements
-        output = io.StringIO()
-        sys.stdout = output
-        exec(code)
-        result = output.getvalue()
-        sys.stdout = sys._stdout_
-        return result
-    except Exception as e:
-        return f"Error: {str(e)}"
-
-# Region and challenge setup
-def forest_of_arrays_challenge():
-    print("Solve the Maximum Subarray Sum Problem (Kadane's Algorithm).")
-    arr = [random.randint(-10, 10) for _ in range(10)]
-    print(f"Array: {arr}")
-    print("Write a Python code to solve the maximum subarray sum (Kadane's algorithm) for this array.")
-    return arr
-
-# Game loop with interactive code execution
-def game_loop():
-    player = Player()
-    input_box = InputBox(50, HEIGHT - 100, WIDTH - 100, 40, "Enter your Python code to solve the challenge!")
-    regions = ["Forest of Arrays"]
-    current_region = 0
-    challenge_result = None
-
-    running = True
-    while running:
-        screen.fill(GREEN)
-
-        # Event handling
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            input_box.handle_event(event)
-
-        # Display current region
-        font = pygame.font.Font(None, 36)
-        region_text = font.render(f"Current Region: {regions[current_region]}", True, WHITE)
-        screen.blit(region_text, (10, 10))
-
-        # Draw the player (Aria)
-        player.draw(screen)
-
-        # Display challenge and code output
-        if current_region == 0:
-            arr = forest_of_arrays_challenge()
-            challenge_code = f"Kadane's algorithm for the array: {arr}"
-            challenge_output = execute_user_code(input_box.text)
-            font = pygame.font.Font(None, 24)
-            challenge_text = font.render(f"Challenge: {challenge_code}", True, WHITE)
-            screen.blit(challenge_text, (10, 60))
-            output_text = font.render(f"Output: {challenge_output}", True, WHITE)
-            screen.blit(output_text, (10, 120))
-
-        # Draw input box and execute button
-        input_box.draw(screen)
-
-        # Update the screen
-        pygame.display.update()
-        clock.tick(FPS)
-
-# Main function
-def main():
-    game_loop()
-    pygame.quit()
-
-if _name_ == "_main_":
-    main()
+  return (
+    <ThemeProvider>
+      <Router>
+        <Navbar />
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route path="/login" element={<Login />} />
+          <Route path="/signup" element={<Signup />} />
+          <Route path="/profile" element={<Profile />} />
+          <Route path="/leaderboard" element={<Leaderboard />} />
+        </Routes>
+      </Router>
+    </ThemeProvider>
+  );
+}
