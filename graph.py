@@ -1,23 +1,12 @@
 import pygame
 import sys
-import heapq
-import io
-from flask import Flask, Response, jsonify, request
-from threading import Thread, Lock
-import time
+import random
+from time import sleep
 
-app = Flask(__name__)
-game_lock = Lock()
-current_frame = None
-game_state = {
-    "current_problem": 0,
-    "path": [],
-    "game_over": False,
-    "running": True,
-    "animating": False
-}
+# Initialize Pygame
+pygame.init()
 
-# Constants from original code
+# Constants
 WIDTH = 800
 HEIGHT = 600
 CELL_SIZE = 40
@@ -30,223 +19,228 @@ GREEN = (0, 255, 0)
 BLUE = (0, 0, 255)
 GRAY = (200, 200, 200)
 
-# Load and scale images
-def load_images():
-    global player_img, obstacle_img, exit_img
+# Initialize images with fallback surfaces
+try:
     player_img = pygame.image.load('player.png')
-    obstacle_img = pygame.image.load('obstacle.png')
-    exit_img = pygame.image.load('exit.png')
-    
-    player_img = pygame.transform.scale(player_img, (CELL_SIZE, CELL_SIZE))
-    obstacle_img = pygame.transform.scale(obstacle_img, (CELL_SIZE, CELL_SIZE))
-    exit_img = pygame.transform.scale(exit_img, (CELL_SIZE, CELL_SIZE))
+    reward_img = pygame.image.load('obstacle.png')
+    knapsack_img = pygame.image.load('exit.png')
+except pygame.error:
+    # Create placeholder surfaces if images not found
+    player_img = pygame.Surface((CELL_SIZE, CELL_SIZE))
+    player_img.fill(BLUE)
+    reward_img = pygame.Surface((CELL_SIZE, CELL_SIZE))
+    reward_img.fill(GREEN)
+    knapsack_img = pygame.Surface((CELL_SIZE, CELL_SIZE))
+    knapsack_img.fill(RED)
 
-class Cell:
+# Scale images
+player_img = pygame.transform.scale(player_img, (CELL_SIZE, CELL_SIZE))
+reward_img = pygame.transform.scale(reward_img, (CELL_SIZE, CELL_SIZE))
+knapsack_img = pygame.transform.scale(knapsack_img, (CELL_SIZE, CELL_SIZE))
+
+class Reward:
+    def __init__(self, row, col, weight, value):
+        self.row = row
+        self.col = col
+        self.weight = weight
+        self.value = value
+        self.size = CELL_SIZE + (weight * 5)
+        self.image = pygame.transform.scale(reward_img, (self.size, self.size))
+
+    def draw(self, screen):
+        screen.blit(self.image, (self.col * CELL_SIZE, self.row * CELL_SIZE))
+
+class Player:
     def __init__(self, row, col):
         self.row = row
         self.col = col
-        self.x = col * CELL_SIZE
-        self.y = row * CELL_SIZE
-        self.is_obstacle = False
-        self.neighbors = []
-        self.previous = None
-        self.distance = float('inf')
+        self.image = player_img
+        self.has_knapsack = False
+        self.collected_rewards = []
 
     def draw(self, screen):
-        if self.is_obstacle:
-            screen.blit(obstacle_img, (self.x, self.y))
-
-class Grid:
-    def __init__(self, rows, cols):
-        self.rows = rows
-        self.cols = cols
-        self.grid = [[Cell(row, col) for col in range(cols)] for row in range(rows)]
-        self.start = None
-        self.exit = None
-
-    def get_cell(self, row, col):
-        if 0 <= row < self.rows and 0 <= col < self.cols:
-            return self.grid[row][col]
-        return None
-
-    def reset(self):
-        for row in self.grid:
-            for cell in row:
-                cell.distance = float('inf')
-                cell.previous = None
+        screen.blit(self.image, (self.col * CELL_SIZE, self.row * CELL_SIZE))
+        if self.has_knapsack:
+            screen.blit(knapsack_img, (self.col * CELL_SIZE, self.row * CELL_SIZE))
 
 def create_problem(problem_num):
     problems = [
         {
-            'n': 5,
-            'start': (0, 0),
-            'exit': (4, 4),
-            'obstacles': [(1, 1), (2, 2), (3, 3)]
+            'grid_size': 5,
+            'start_pos': (0, 0),
+            'exit_pos': (4, 4),
+            'rewards': [
+                {'pos': (1, 1), 'weight': 2, 'value': 10},
+                {'pos': (2, 2), 'weight': 3, 'value': 15},
+                {'pos': (3, 3), 'weight': 1, 'value': 7}
+            ]
         },
         {
-            'n': 6,
-            'start': (0, 5),
-            'exit': (5, 0),
-            'obstacles': [(1, 0), (2, 1), (3, 2), (4, 3)]
+            'grid_size': 6,
+            'start_pos': (0, 5),
+            'exit_pos': (5, 0),
+            'rewards': [
+                {'pos': (1, 0), 'weight': 4, 'value': 20},
+                {'pos': (2, 1), 'weight': 2, 'value': 10},
+                {'pos': (3, 2), 'weight': 3, 'value': 15}
+            ]
         },
         {
-            'n': 7,
-            'start': (3, 3),
-            'exit': (6, 6),
-            'obstacles': [(0, 0), (1, 1), (2, 2), (4, 4), (5, 5)]
+            'grid_size': 7,
+            'start_pos': (3, 3),
+            'exit_pos': (6, 6),
+            'rewards': [
+                {'pos': (0, 0), 'weight': 1, 'value': 5},
+                {'pos': (1, 1), 'weight': 2, 'value': 10},
+                {'pos': (2, 2), 'weight': 3, 'value': 15}
+            ]
         }
     ]
     return problems[problem_num]
 
-def dijkstra(grid, start):
-    grid.reset()
-    start_cell = grid.get_cell(*start)
-    start_cell.distance = 0
-    queue = [(0, start_cell.row, start_cell.col)]
+def knapsack(weights, values, capacity):
+    n = len(weights)
+    dp = [[0] * (capacity + 1) for _ in range(n + 1)]
     
-    while queue:
-        current_dist, row, col = heapq.heappop(queue)
-        current_cell = grid.get_cell(row, col)
-        
-        if current_cell == grid.exit:
-            break
-            
-        for neighbor in current_cell.neighbors:
-            if neighbor.is_obstacle:
-                continue
-            new_dist = current_dist + 1
-            if new_dist < neighbor.distance:
-                neighbor.distance = new_dist
-                neighbor.previous = current_cell
-                heapq.heappush(queue, (new_dist, neighbor.row, neighbor.col))
+    for i in range(1, n + 1):
+        for w in range(capacity + 1):
+            if weights[i - 1] <= w:
+                dp[i][w] = max(dp[i - 1][w], dp[i - 1][w - weights[i - 1]] + values[i - 1])
+            else:
+                dp[i][w] = dp[i - 1][w]
     
-    path = []
-    current = grid.exit
-    while current:
-        path.insert(0, (current.row, current.col))
-        current = current.previous
-    return path if grid.exit.distance != float('inf') else []
+    selected = []
+    w = capacity
+    for i in range(n, 0, -1):
+        if dp[i][w] != dp[i - 1][w]:
+            selected.append(i - 1)
+            w -= weights[i - 1]
+    
+    return selected
 
-def run_game():
-    global current_frame, game_state
-    pygame.init()
-    load_images()
+def main():
+    screen = pygame.display.set_mode((WIDTH, HEIGHT))
+    pygame.display.set_caption("Knapsack Problem")
     
-    screen = pygame.Surface((WIDTH, HEIGHT))
-    clock = pygame.time.Clock()
-    
+    current_problem = 0
     problems = [create_problem(i) for i in range(3)]
     grid = None
-    path = []
-    current_step = 0
-
-    def setup_grid(problem):
-        nonlocal grid
+    player = None
+    rewards = []
+    exit_pos = None
+    running = True
+    game_over = False
+    success = False
+    
+    buttons = {
+        'start': pygame.Rect(WIDTH//2 - BUTTON_WIDTH - 10, HEIGHT - BUTTON_HEIGHT - 10, BUTTON_WIDTH, BUTTON_HEIGHT),
+        'next': pygame.Rect(WIDTH//2 + 10, HEIGHT - BUTTON_HEIGHT - 10, BUTTON_WIDTH, BUTTON_HEIGHT)
+    }
+    
+    def setup_problem(problem):
+        nonlocal grid, player, rewards, exit_pos
         config = problems[problem]
-        n = config['n']
-        grid = Grid(n, n)
+        grid_size = config['grid_size']
+        grid = [[None for _ in range(grid_size)] for _ in range(grid_size)]
         
-        grid.start = grid.get_cell(*config['start'])
-        grid.exit = grid.get_cell(*config['exit'])
+        # Place player
+        player = Player(*config['start_pos'])
+        grid[player.row][player.col] = player
         
-        for obstacle in config['obstacles']:
-            grid.get_cell(*obstacle).is_obstacle = True
+        # Place exit
+        exit_pos = config['exit_pos']
+        
+        # Place rewards
+        rewards = []
+        for reward_info in config['rewards']:
+            reward = Reward(*reward_info['pos'], reward_info['weight'], reward_info['value'])
+            rewards.append(reward)
+            grid[reward.row][reward.col] = reward
+    
+    setup_problem(current_problem)
+    
+    while running:
+        screen.fill(WHITE)
+        
+        # Draw grid
+        if grid:
+            for row in range(len(grid)):
+                for col in range(len(grid[0])):
+                    if grid[row][col]:
+                        grid[row][col].draw(screen)
+                    pygame.draw.rect(screen, BLACK, (col * CELL_SIZE, row * CELL_SIZE, CELL_SIZE, CELL_SIZE), 1)
+        
+        # Draw exit position
+        if exit_pos:
+            pygame.draw.rect(screen, RED, (exit_pos[1]*CELL_SIZE, exit_pos[0]*CELL_SIZE, CELL_SIZE, CELL_SIZE))
+        
+        # Draw buttons
+        for btn_name, rect in buttons.items():
+            pygame.draw.rect(screen, GRAY, rect)
+            btn_text = pygame.font.SysFont(None, 30).render(btn_name.capitalize(), True, BLACK)
+            screen.blit(btn_text, (rect.x + 25, rect.y + 10))
+        
+        if game_over:
+            game_over_text = pygame.font.SysFont(None, 60).render('GAME OVER', True, RED)
+            screen.blit(game_over_text, (WIDTH//2-120, HEIGHT//2-30))
+        
+        if success:
+            success_text = pygame.font.SysFont(None, 60).render('SUCCESS!', True, GREEN)
+            screen.blit(success_text, (WIDTH//2-100, HEIGHT//2-30))
+        
+        pygame.display.flip()
+        
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+                pygame.quit()
+                sys.exit()
             
-        for row in grid.grid:
-            for cell in row:
-                cell.neighbors = []
-                if cell.row > 0:
-                    neighbor = grid.get_cell(cell.row-1, cell.col)
-                    if neighbor:
-                        cell.neighbors.append(neighbor)
-                if cell.row < grid.rows-1:
-                    neighbor = grid.get_cell(cell.row+1, cell.col)
-                    if neighbor:
-                        cell.neighbors.append(neighbor)
-                if cell.col > 0:
-                    neighbor = grid.get_cell(cell.row, cell.col-1)
-                    if neighbor:
-                        cell.neighbors.append(neighbor)
-                if cell.col < grid.cols-1:
-                    neighbor = grid.get_cell(cell.row, cell.col+1)
-                    if neighbor:
-                        cell.neighbors.append(neighbor)
-
-    setup_grid(0)
-
-    while game_state["running"]:
-        with game_lock:
-            if game_state["animating"] and current_step < len(game_state["path"]):
-                step = game_state["path"][current_step]
-                next_cell = grid.get_cell(*step)
-                
-                if next_cell is None or next_cell.is_obstacle:
-                    game_state["game_over"] = True
-                    game_state["animating"] = False
-                else:
-                    screen.fill(WHITE)
-                    for row in grid.grid:
-                        for cell in row:
-                            cell.draw(screen)
-                            pygame.draw.rect(screen, BLACK, (cell.x, cell.y, CELL_SIZE, CELL_SIZE), 1)
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                x, y = event.pos
+                if buttons['start'].collidepoint(x, y) and not game_over:
+                    # Solve Knapsack problem
+                    weights = [r.weight for r in rewards]
+                    values = [r.value for r in rewards]
+                    capacity = 5
+                    selected = knapsack(weights, values, capacity)
                     
-                    screen.blit(exit_img, (grid.exit.x, grid.exit.y))
-                    screen.blit(player_img, (next_cell.x, next_cell.y))
-                    current_step += 1
+                    # Animate collection
+                    for idx in selected:
+                        if idx < len(rewards):
+                            reward = rewards[idx]
+                            # Clear previous position
+                            old_row, old_col = player.row, player.col
+                            grid[old_row][old_col] = None
+                            
+                            # Update player position
+                            player.row, player.col = reward.row, reward.col
+                            player.collected_rewards.append(reward)
+                            grid[player.row][player.col] = player
+                            
+                            # Update display
+                            screen.fill(WHITE)
+                            for row in range(len(grid)):
+                                for col in range(len(grid[0])):
+                                    if grid[row][col]:
+                                        grid[row][col].draw(screen)
+                                    pygame.draw.rect(screen, BLACK, (col * CELL_SIZE, row * CELL_SIZE, CELL_SIZE, CELL_SIZE), 1)
+                            pygame.display.flip()
+                            sleep(0.5)
                     
-                    if current_step >= len(game_state["path"]):
-                        game_state["animating"] = False
-            else:
-                screen.fill(WHITE)
-                for row in grid.grid:
-                    for cell in row:
-                        cell.draw(screen)
-                        pygame.draw.rect(screen, BLACK, (cell.x, cell.y, CELL_SIZE, CELL_SIZE), 1)
-                
-                screen.blit(player_img, (grid.start.x, grid.start.y))
-                screen.blit(exit_img, (grid.exit.x, grid.exit.y))
+                    # Move to exit
+                    if exit_pos and player.collected_rewards:
+                        old_row, old_col = player.row, player.col
+                        grid[old_row][old_col] = None
+                        player.row, player.col = exit_pos
+                        grid[player.row][player.col] = player
+                        success = True
+                    
+                elif buttons['next'].collidepoint(x, y) and current_problem < len(problems)-1 and not game_over:
+                    current_problem += 1
+                    setup_problem(current_problem)
+                    game_over = False
+                    success = False
 
-            img_str = pygame.image.tostring(screen, "RGB")
-            current_frame = img_str
-
-        clock.tick(30)
-
-    pygame.quit()
-
-@app.route('/frame')
-def get_frame():
-    with game_lock:
-        if current_frame:
-            return Response(current_frame, mimetype='image/rgb')
-        return Response(status=204)
-
-@app.route('/start', methods=['POST'])
-def start_game():
-    with game_lock:
-        if not game_state["animating"]:
-            config = create_problem(game_state["current_problem"])
-            grid = Grid(config['n'], config['n'])
-            game_state["path"] = dijkstra(grid, config['start'])
-            game_state["animating"] = True
-            game_state["game_over"] = False
-    return jsonify(success=True)
-
-@app.route('/next', methods=['POST'])
-def next_problem():
-    with game_lock:
-        if game_state["current_problem"] < 2:
-            game_state["current_problem"] += 1
-            game_state["path"] = []
-            game_state["animating"] = False
-            game_state["game_over"] = False
-    return jsonify(success=True)
-
-@app.route('/state')
-def get_state():
-    return jsonify(game_state)
-
-if __name__ == '__main__':
-    game_thread = Thread(target=run_game)
-    game_thread.daemon = True
-    game_thread.start()
-    app.run(threaded=True, port=5000)
+if __name__ == "__main__":
+    main()
