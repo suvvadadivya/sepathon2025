@@ -1,95 +1,69 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import axios from 'axios';
 
-const GameComponent = () => {
-    const [gameState, setGameState] = useState({
-        current_problem: 0,
-        game_over: false,
-        animating: false
+const GameViewer = () => {
+  const [currentFrame, setCurrentFrame] = useState('');
+  const [problemNum, setProblemNum] = useState(0);
+  const [animationFrames, setAnimationFrames] = useState([]);
+  const [animating, setAnimating] = useState(false);
+
+  useEffect(() => {
+    // Load initial frame
+    axios.get('/api/init').then(res => {
+      setCurrentFrame(res.data.frame);
+      setProblemNum(res.data.problem);
     });
-    const canvasRef = useRef(null);
-    const animationRef = useRef(null);
+  }, []);
 
-    useEffect(() => {
-        const canvas = canvasRef.current;
-        const ctx = canvas.getContext('2d');
-        const imageData = new ImageData(800, 600);
-        
-        const fetchFrame = async () => {
-            try {
-                const response = await fetch('http://localhost:5000/frame');
-                const buffer = await response.arrayBuffer();
-                const bytes = new Uint8ClampedArray(buffer);
-                imageData.data.set(bytes);
-                ctx.putImageData(imageData, 0, 0);
-            } catch (error) {
-                console.error('Error fetching frame:', error);
-            }
-            animationRef.current = requestAnimationFrame(fetchFrame);
-        };
+  useEffect(() => {
+    if (animating && animationFrames.length > 0) {
+      const timer = setInterval(() => {
+        setAnimationFrames(prev => {
+          const [current, ...remaining] = prev;
+          setCurrentFrame(current);
+          if (remaining.length === 0) setAnimating(false);
+          return remaining;
+        });
+      }, 500);
+      return () => clearInterval(timer);
+    }
+  }, [animating, animationFrames]);
 
-        const fetchState = async () => {
-            try {
-                const response = await fetch('http://localhost:5000/state');
-                const state = await response.json();
-                setGameState(state);
-            } catch (error) {
-                console.error('Error fetching state:', error);
-            }
-        };
+  const handleStart = () => {
+    axios.get('/api/start').then(res => {
+      setAnimationFrames(res.data.frames);
+      setAnimating(true);
+    });
+  };
 
-        animationRef.current = requestAnimationFrame(fetchFrame);
-        const stateInterval = setInterval(fetchState, 500);
+  const handleNext = () => {
+    axios.get('/api/next').then(res => {
+      setCurrentFrame(res.data.frame);
+      setProblemNum(res.data.problem);
+    });
+  };
 
-        return () => {
-            cancelAnimationFrame(animationRef.current);
-            clearInterval(stateInterval);
-        };
-    }, []);
-
-    const handleStart = async () => {
-        await fetch('http://localhost:5000/start', { method: 'POST' });
-    };
-
-    const handleNext = async () => {
-        await fetch('http://localhost:5000/next', { method: 'POST' });
-    };
-
-    return (
-        <div style={{ textAlign: 'center' }}>
-            <canvas 
-                ref={canvasRef}
-                width={800}
-                height={600}
-                style={{ border: '1px solid #ccc', margin: '20px' }}
-            />
-            <div>
-                <button 
-                    onClick={handleStart}
-                    disabled={gameState.animating || gameState.game_over}
-                    style={{ margin: '0 10px', padding: '10px 20px' }}
-                >
-                    Start
-                </button>
-                <button 
-                    onClick={handleNext}
-                    disabled={gameState.current_problem >= 2 || gameState.animating}
-                    style={{ margin: '0 10px', padding: '10px 20px' }}
-                >
-                    Next
-                </button>
-            </div>
-            {gameState.game_over && (
-                <div style={{ color: 'red', fontSize: '24px', marginTop: '20px' }}>
-                    Game Over!
-                </div>
-            )}
-            {gameState.current_problem >= 2 && !gameState.game_over && (
-                <div style={{ color: 'green', fontSize: '24px', marginTop: '20px' }}>
-                    Success! All problems solved!
-                </div>
-            )}
+  return (
+    <div>
+      <div style={{ position: 'relative' }}>
+        <img 
+          src={`data:image/png;base64,${currentFrame}`} 
+          alt="game frame"
+          style={{ border: '1px solid black' }}
+        />
+        <div style={{ position: 'absolute', bottom: 10, left: '50%', transform: 'translateX(-50%)' }}>
+          <button onClick={handleStart} disabled={animating}>Start</button>
+          <button 
+            onClick={handleNext} 
+            disabled={problemNum >= 2 || animating}
+            style={{ marginLeft: 10 }}
+          >
+            Next
+          </button>
         </div>
-    );
+      </div>
+    </div>
+  );
 };
 
-export default GameComponent;
+export default GameViewer;
